@@ -75,18 +75,24 @@ jobs:
       - name: 🤖 Generate PR description
         id: generate-description
         if: steps.get-diff.outputs.has_changes == 'true'
+        env:
+          PR_DIFF: ${{ steps.get-diff.outputs.diff }}
         run: |
           echo "=== Starting PR description generation ==="
           
-          DIFF='${{ steps.get-diff.outputs.diff }}'
-          
           echo "=== Preparing JSON payload ==="
           # JSONペイロードを生成（jqを使用して安全にエスケープ）
-          REQUEST_JSON=$(jq -n --arg diff "$DIFF" --arg env "frontend" '{ inputs: { diff: $diff, env: $env }, response_mode: "blocking", user: "github-actions-pr-concierge" }')
+          REQUEST_JSON=$(jq -n --arg diff "$PR_DIFF" --arg env "frontend" '{ inputs: { diff: $diff, env: $env }, response_mode: "blocking", user: "github-actions-pr-concierge" }')
           
           echo "=== Making API call ==="
           echo "API Endpoint: $DIFY_BASE_URL/workflows/run"
           echo "API Key prefix: $(echo "$DIFY_PR_API_KEY" | head -c 8)..."
+          
+          # APIキーが設定されているか確認
+          if [[ -z "$DIFY_PR_API_KEY" ]]; then
+            echo "::error::DIFY_PR_API_KEY environment variable is empty"
+            exit 1
+          fi
           
           RESPONSE=$(curl -s -w "HTTP_CODE:%{http_code}" -X POST "$DIFY_BASE_URL/workflows/run" \
             -H "Authorization: Bearer $DIFY_PR_API_KEY" \
