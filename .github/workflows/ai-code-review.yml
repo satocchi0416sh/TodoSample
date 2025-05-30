@@ -165,15 +165,11 @@ jobs:
             
             # コメント本文を作成（suggestion ブロック付き）
             if [[ -n "$COMMENT" ]]; then
-              BODY="$COMMENT
-
-\`\`\`suggestion
-$SUGGESTION_CODE
-\`\`\`"
+              # コメントありの場合
+              BODY="$COMMENT"$'\n\n'"$(echo '```suggestion')"$'\n'"$SUGGESTION_CODE"$'\n'"$(echo '```')"
             else
-              BODY="\`\`\`suggestion
-$SUGGESTION_CODE
-\`\`\`"
+              # コメントなしの場合
+              BODY="$(echo '```suggestion')"$'\n'"$SUGGESTION_CODE"$'\n'"$(echo '```')"
             fi
             
             # GitHub API でレビューコメントを作成
