@@ -12,18 +12,20 @@ Commit Buddy は、Dify AI を使用して git diff から自動的に Conventio
 - 🛡️ **安全な実行**: ドライランモードとユーザー確認機能
 - 🎨 **美しい出力**: カラフルで分かりやすいコンソール出力
 - ⚙️ **柔軟な設定**: 環境変数やオプションで動作をカスタマイズ可能
+- 📝 **PR Concierge**: PRの説明・リスク・テスト案を自動生成（GitHub Actions）
 
 ## 📦 構成ファイル
 
 ```
 commit-buddy/
-├── commit-buddy.sh           # メインスクリプト
-├── setup-commit-buddy.sh     # セットアップスクリプト
+├── commit-buddy.sh              # メインスクリプト
+├── setup-commit-buddy.sh        # セットアップスクリプト
 ├── .githooks/
-│   └── pre-commit           # pre-commit hook
+│   └── pre-commit              # pre-commit hook
 ├── .github/workflows/
-│   └── commit-buddy.yml     # GitHub Actions ワークフロー
-└── COMMIT_BUDDY_README.md   # このファイル
+│   ├── commit-buddy.yml        # Commit Buddy GitHub Actions
+│   └── pr-concierge.yml        # PR Concierge GitHub Actions
+└── COMMIT_BUDDY_README.md      # このファイル
 ```
 
 ## 🚀 クイックスタート
@@ -135,8 +137,11 @@ git config --unset core.hooksPath
 1. **Secrets の設定**
 
    GitHub リポジトリの Settings → Secrets and variables → Actions で以下を設定：
-   - `DIFY_API_KEY`: Dify API キー
+   - `DIFY_API_KEY`: Dify API キー（Commit Buddy用）
+   - `DIFY_PR_API_KEY`: Dify API キー（PR Concierge用）
    - `DIFY_BASE_URL`: Dify ベース URL
+
+   **注意**: PR Concierge用に別のDifyワークフローを使用する場合は、`DIFY_PR_API_KEY`に異なるAPIキーを設定してください。
 
 2. **自動実行**
 
@@ -187,6 +192,59 @@ feat(auth): ユーザー認証機能を追加
 
 Closes #123
 ```
+
+## 🎯 PR Concierge
+
+PRが作成・更新された際に、AIが自動で説明・リスク・テスト案を生成してPR本文に追記します。
+
+### 入力データ
+
+```json
+{
+  "diff": "<PR の diff>",
+  "env": "frontend"
+}
+```
+
+### 動作
+
+1. **自動実行**: PRが `opened` または `synchronize` されると自動実行
+2. **diff解析**: PRの変更内容をAIが解析
+3. **説明生成**: 説明・リスク・テスト案を含むMarkdownを生成
+4. **PR更新**: GitHub CLIでPR本文を自動更新
+
+### 出力例
+
+```markdown
+<!-- AI-GENERATED-CONTENT -->
+## 📝 変更概要
+フロントエンドのTodoアプリに新機能を追加
+
+## 🎯 変更内容
+- 新しいコンポーネント `TodoFilter` を追加
+- フィルタリング機能の実装
+
+## ⚠️ リスク
+- 既存のフィルタリングロジックへの影響
+- パフォーマンスへの影響
+
+## 🧪 テスト案
+- [ ] 基本的なフィルタリング動作のテスト
+- [ ] エッジケースのテスト
+- [ ] パフォーマンステスト
+<!-- /AI-GENERATED-CONTENT -->
+```
+
+### 設定
+
+PR Concierge用のDifyワークフローは以下の仕様が必要です：
+
+**入力:**
+- `diff` (string): PR の diff 内容
+- `env` (string): 環境情報（例: "frontend"）
+
+**出力:**
+- `pr_body_md` または `text` (string): 生成されたPR本文（Markdown形式）
 
 ## 🔧 トラブルシューティング
 

@@ -1,0 +1,150 @@
+name: 🎯 PR Concierge - Auto PR Description
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  pr-concierge:
+    runs-on: ubuntu-latest
+    if: github.event.action == 'opened' || github.event.action == 'synchronize'
+    
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: 🔧 Setup dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+          
+          # GitHub CLI をインストール
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh
+
+      - name: 📊 Get PR diff
+        id: get-diff
+        run: |
+          # PRの基準ブランチとの差分を取得
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          
+          echo "🔍 Getting diff between $BASE_SHA and $HEAD_SHA"
+          
+          DIFF=$(git diff "$BASE_SHA...$HEAD_SHA")
+          
+          if [[ -z "$DIFF" ]]; then
+            echo "::notice::No changes found in the PR"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+          
+          # マルチライン対応
+          echo "diff<<EOF" >> $GITHUB_OUTPUT
+          echo "$DIFF" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: 🤖 Generate PR description
+        id: generate-description
+        if: steps.get-diff.outputs.has_changes == 'true'
+        run: |
+          DIFF='${{ steps.get-diff.outputs.diff }}'
+          
+          # JSONエスケープ
+          ESCAPED_DIFF=$(echo "$DIFF" | jq -Rs .)
+          
+          echo "🔄 Generating PR description with AI..."
+          
+          RESPONSE=$(curl -s -X POST "${{ secrets.DIFY_BASE_URL }}/workflows/run" \
+            -H "Authorization: Bearer ${{ secrets.DIFY_PR_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"inputs\": {
+                \"diff\": $ESCAPED_DIFF,
+                \"env\": \"frontend\"
+              },
+              \"response_mode\": \"blocking\",
+              \"user\": \"github-actions-pr-concierge\"
+            }")
+          
+          # エラーチェック
+          if [[ $? -ne 0 ]]; then
+            echo "::error::Failed to call Dify API"
+            exit 1
+          fi
+          
+          ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // empty')
+          if [[ -n "$ERROR_MSG" ]]; then
+            echo "::error::Dify API Error: $ERROR_MSG"
+            exit 1
+          fi
+          
+          # PR本文抽出
+          PR_BODY=$(echo "$RESPONSE" | jq -r '.data.outputs.pr_body_md // .data.outputs.text // empty')
+          
+          if [[ -z "$PR_BODY" || "$PR_BODY" == "null" ]]; then
+            echo "::error::Failed to generate PR description. API Response: $RESPONSE"
+            exit 1
+          fi
+          
+          echo "Generated PR description:"
+          echo "$PR_BODY"
+          
+          # マルチライン対応
+          echo "pr_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$PR_BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: 📝 Update PR description
+        if: steps.generate-description.outputs.pr_body != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          GENERATED_BODY='${{ steps.generate-description.outputs.pr_body }}'
+          
+          echo "📝 Updating PR #$PR_NUMBER with AI-generated description"
+          
+          # 既存のPR本文を取得
+          CURRENT_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body')
+          
+          # 一時ファイルに新しい本文を作成
+          if echo "$CURRENT_BODY" | grep -q "<!-- AI-GENERATED-CONTENT -->"; then
+            echo "PR already has AI-generated content, updating..."
+            echo "$CURRENT_BODY" | perl -0pe 's/<!-- AI-GENERATED-CONTENT -->.*?<!-- \/AI-GENERATED-CONTENT -->/<!-- AI-GENERATED-CONTENT -->\n'"$GENERATED_BODY"'\n<!-- \/AI-GENERATED-CONTENT -->/gs' > /tmp/new_body.md
+          else
+            if [[ -n "$CURRENT_BODY" && "$CURRENT_BODY" != "null" ]]; then
+              printf "%s\n\n---\n\n<!-- AI-GENERATED-CONTENT -->\n%s\n<!-- /AI-GENERATED-CONTENT -->" "$CURRENT_BODY" "$GENERATED_BODY" > /tmp/new_body.md
+            else
+              printf "<!-- AI-GENERATED-CONTENT -->\n%s\n<!-- /AI-GENERATED-CONTENT -->" "$GENERATED_BODY" > /tmp/new_body.md
+            fi
+          fi
+          
+          # PR本文を更新
+          gh pr edit "$PR_NUMBER" --body-file /tmp/new_body.md
+          
+          echo "✅ PR description updated successfully!"
+
+      - name: 📊 Summary
+        if: always()
+        run: |
+          echo "## 🎯 PR Concierge Summary" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ steps.get-diff.outputs.has_changes }}" == "false" ]]; then
+            echo "No changes found in the PR." >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ steps.generate-description.outputs.pr_body }}" != "" ]]; then
+            echo "✅ PR description was successfully generated and updated by AI." >> $GITHUB_STEP_SUMMARY
+            echo "**PR Number:** #${{ github.event.pull_request.number }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Environment:** frontend" >> $GITHUB_STEP_SUMMARY
+            echo "**Base Branch:** ${{ github.event.pull_request.base.ref }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Head Branch:** ${{ github.event.pull_request.head.ref }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Failed to generate PR description." >> $GITHUB_STEP_SUMMARY
+          fi 
