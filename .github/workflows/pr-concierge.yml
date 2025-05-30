@@ -16,6 +16,24 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
+      - name: 🔍 Check required secrets
+        run: |
+          echo "🔍 Checking required secrets..."
+          
+          if [[ -z "${{ secrets.DIFY_PR_API_KEY }}" ]]; then
+            echo "::error::DIFY_PR_API_KEY secret is not set. Please configure it in repository Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          
+          if [[ -z "${{ secrets.DIFY_BASE_URL }}" ]]; then
+            echo "::warning::DIFY_BASE_URL secret is not set. Using default: https://dify.arklet.jp/v1"
+            echo "DIFY_BASE_URL=https://dify.arklet.jp/v1" >> $GITHUB_ENV
+          else
+            echo "DIFY_BASE_URL=${{ secrets.DIFY_BASE_URL }}" >> $GITHUB_ENV
+          fi
+          
+          echo "✅ Required secrets are properly configured"
+
       - name: 🔧 Setup dependencies
         run: |
           sudo apt-get update
@@ -61,8 +79,10 @@ jobs:
           ESCAPED_DIFF=$(echo "$DIFF" | jq -Rs .)
           
           echo "🔄 Generating PR description with AI..."
+          echo "📡 API Endpoint: $DIFY_BASE_URL/workflows/run"
+          echo "🔑 API Key: $(echo "${{ secrets.DIFY_PR_API_KEY }}" | head -c 8)..."
           
-          RESPONSE=$(curl -s -X POST "${{ secrets.DIFY_BASE_URL }}/workflows/run" \
+          RESPONSE=$(curl -s -w "HTTP_CODE:%{http_code}" -X POST "$DIFY_BASE_URL/workflows/run" \
             -H "Authorization: Bearer ${{ secrets.DIFY_PR_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d "{
@@ -74,27 +94,45 @@ jobs:
               \"user\": \"github-actions-pr-concierge\"
             }")
           
-          # エラーチェック
-          if [[ $? -ne 0 ]]; then
-            echo "::error::Failed to call Dify API"
+          # HTTPステータスコードを抽出
+          HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+          RESPONSE_BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+          
+          echo "📊 HTTP Status Code: $HTTP_CODE"
+          echo "📝 Response Body: $RESPONSE_BODY"
+          
+          # HTTPエラーチェック
+          if [[ "$HTTP_CODE" -ge 400 ]]; then
+            echo "::error::Dify API HTTP Error: $HTTP_CODE"
+            echo "::error::Response: $RESPONSE_BODY"
             exit 1
           fi
           
-          ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // empty')
+          # cURLエラーチェック
+          if [[ $? -ne 0 ]]; then
+            echo "::error::Failed to call Dify API (curl error)"
+            exit 1
+          fi
+          
+          # JSON エラーチェック
+          ERROR_MSG=$(echo "$RESPONSE_BODY" | jq -r '.error // empty')
           if [[ -n "$ERROR_MSG" ]]; then
             echo "::error::Dify API Error: $ERROR_MSG"
+            echo "::error::Full Response: $RESPONSE_BODY"
             exit 1
           fi
           
           # PR本文抽出
-          PR_BODY=$(echo "$RESPONSE" | jq -r '.data.outputs.pr_body_md // .data.outputs.text // empty')
+          PR_BODY=$(echo "$RESPONSE_BODY" | jq -r '.data.outputs.pr_body_md // .data.outputs.text // empty')
           
           if [[ -z "$PR_BODY" || "$PR_BODY" == "null" ]]; then
-            echo "::error::Failed to generate PR description. API Response: $RESPONSE"
+            echo "::error::Failed to generate PR description. No valid output found."
+            echo "::error::Expected 'data.outputs.pr_body_md' or 'data.outputs.text' field"
+            echo "::error::API Response: $RESPONSE_BODY"
             exit 1
           fi
           
-          echo "Generated PR description:"
+          echo "✅ Generated PR description:"
           echo "$PR_BODY"
           
           # マルチライン対応
