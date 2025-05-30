@@ -76,36 +76,32 @@ jobs:
         id: generate-description
         if: steps.get-diff.outputs.has_changes == 'true'
         run: |
-          set -x  # デバッグモード有効化
           echo "=== Starting PR description generation ==="
           
           DIFF='${{ steps.get-diff.outputs.diff }}'
           
-          echo "=== Line 10: JSON escape ==="
+          echo "=== Preparing JSON payload ==="
           # JSONペイロードを生成（jqを使用して安全にエスケープ）
           REQUEST_JSON=$(jq -n --arg diff "$DIFF" --arg env "frontend" '{ inputs: { diff: $diff, env: $env }, response_mode: "blocking", user: "github-actions-pr-concierge" }')
           
-          echo "=== Line 15: Preparing API call ==="
-          echo "🔄 Generating PR description with AI..."
-          echo "📡 API Endpoint: $DIFY_BASE_URL/workflows/run"
-          echo "🔑 API Key: $(echo "${{ secrets.DIFY_PR_API_KEY }}" | head -c 8)..."
+          echo "=== Making API call ==="
+          echo "API Endpoint: $DIFY_BASE_URL/workflows/run"
+          echo "API Key prefix: $(echo "$DIFY_PR_API_KEY" | head -c 8)..."
           
-          echo "=== Line 20: Making API call ==="
           RESPONSE=$(curl -s -w "HTTP_CODE:%{http_code}" -X POST "$DIFY_BASE_URL/workflows/run" \
             -H "Authorization: Bearer $DIFY_PR_API_KEY" \
             -H "Content-Type: application/json" \
             -d "$REQUEST_JSON")
           CURL_EXIT_CODE=$?
           
-          echo "=== Line 30: Processing response ==="
+          echo "=== Processing response ==="
           # HTTPステータスコードを抽出
           HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
           RESPONSE_BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
           
-          echo "📊 HTTP Status Code: $HTTP_CODE"
-          echo "📝 Response Body: $RESPONSE_BODY"
+          echo "HTTP Status Code: $HTTP_CODE"
+          echo "Response Body: $RESPONSE_BODY"
           
-          echo "=== Line 40: Error checking ==="
           # cURLエラーチェック (最初にチェック)
           if [[ $CURL_EXIT_CODE -ne 0 ]]; then
             echo "::error::Failed to call Dify API (curl error code: $CURL_EXIT_CODE)"
@@ -119,7 +115,6 @@ jobs:
             exit 1
           fi
           
-          echo "=== Line 50: JSON error check ==="
           # JSON エラーチェック
           ERROR_MSG=$(echo "$RESPONSE_BODY" | jq -r '.error // empty')
           if [[ -n "$ERROR_MSG" ]]; then
@@ -128,11 +123,9 @@ jobs:
             exit 1
           fi
           
-          echo "=== Line 60: Extract PR body ==="
           # PR本文抽出
           PR_BODY=$(echo "$RESPONSE_BODY" | jq -r '.data.outputs.pr_body_md // .data.outputs.text // empty')
           
-          echo "=== Line 75: Validate PR body ==="
           if [[ -z "$PR_BODY" || "$PR_BODY" == "null" ]]; then
             echo "::error::Failed to generate PR description. No valid output found."
             echo "::error::Expected 'data.outputs.pr_body_md' or 'data.outputs.text' field"
@@ -140,11 +133,9 @@ jobs:
             exit 1
           fi
           
-          echo "=== Line 85: Output result ==="
           echo "✅ Generated PR description:"
           echo "$PR_BODY"
           
-          echo "=== Line 90: Set output ==="
           # マルチライン対応
           echo "pr_body<<EOF" >> $GITHUB_OUTPUT
           echo "$PR_BODY" >> $GITHUB_OUTPUT
