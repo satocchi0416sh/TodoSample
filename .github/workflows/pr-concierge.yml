@@ -82,8 +82,8 @@ jobs:
           DIFF='${{ steps.get-diff.outputs.diff }}'
           
           echo "=== Line 10: JSON escape ==="
-          # JSONエスケープ
-          ESCAPED_DIFF=$(echo "$DIFF" | jq -Rs .)
+          # JSONペイロードを生成（jqを使用して安全にエスケープ）
+          REQUEST_JSON=$(jq -n --arg diff "$DIFF" --arg env "frontend" '{ inputs: { diff: $diff, env: $env }, response_mode: "blocking", user: "github-actions-pr-concierge" }')
           
           echo "=== Line 15: Preparing API call ==="
           echo "🔄 Generating PR description with AI..."
@@ -94,14 +94,7 @@ jobs:
           RESPONSE=$(curl -s -w "HTTP_CODE:%{http_code}" -X POST "$DIFY_BASE_URL/workflows/run" \
             -H "Authorization: Bearer $DIFY_PR_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"inputs\": {
-                \"diff\": $ESCAPED_DIFF,
-                \"env\": \"frontend\"
-              },
-              \"response_mode\": \"blocking\",
-              \"user\": \"github-actions-pr-concierge\"
-            }")
+            -d "$REQUEST_JSON")
           CURL_EXIT_CODE=$?
           
           echo "=== Line 30: Processing response ==="
