@@ -32,6 +32,9 @@ jobs:
             echo "DIFY_BASE_URL=${{ secrets.DIFY_BASE_URL }}" >> $GITHUB_ENV
           fi
           
+          # APIキーを環境変数にエクスポート
+          echo "DIFY_PR_API_KEY=${{ secrets.DIFY_PR_API_KEY }}" >> $GITHUB_ENV
+          
           echo "✅ Required secrets are properly configured"
 
       - name: 🔧 Setup dependencies
@@ -89,7 +92,7 @@ jobs:
           
           echo "=== Line 20: Making API call ==="
           RESPONSE=$(curl -s -w "HTTP_CODE:%{http_code}" -X POST "$DIFY_BASE_URL/workflows/run" \
-            -H "Authorization: Bearer ${{ secrets.DIFY_PR_API_KEY }}" \
+            -H "Authorization: Bearer $DIFY_PR_API_KEY" \
             -H "Content-Type: application/json" \
             -d "{
               \"inputs\": {
