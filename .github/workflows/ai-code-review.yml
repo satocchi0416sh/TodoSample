@@ -128,17 +128,14 @@ jobs:
             exit 1
           fi
           
-          # Difyの出力から review_suggestions を抽出
-          # まず text フィールドから JSON文字列を取得
-          TEXT_OUTPUT=$(echo "$RESPONSE_BODY" | jq -r '.data.outputs.text // empty')
-          
-          if [[ -n "$TEXT_OUTPUT" && "$TEXT_OUTPUT" != "null" ]]; then
-            # text フィールドの JSON文字列をパースして review_suggestions を取得
-            SUGGESTIONS=$(echo "$TEXT_OUTPUT" | jq -r '.review_suggestions // empty')
-          else
-            # 直接 review_suggestions フィールドを確認（フォールバック）
-            SUGGESTIONS=$(echo "$RESPONSE_BODY" | jq -r '.data.outputs.review_suggestions // empty')
-          fi
+          # review_suggestions を安全に抽出 (`fromjson?` は失敗してもエラーにならない)
+          SUGGESTIONS=$(echo "$RESPONSE_BODY" | jq -r '
+            # text フィールドがあれば JSON として展開
+            (.data.outputs.text | fromjson? // {}) .review_suggestions
+            # フォールバックでトップレベルも見る
+            // .data.outputs.review_suggestions
+            // empty
+          ')
           
           if [[ -z "$SUGGESTIONS" || "$SUGGESTIONS" == "null" ]]; then
             echo "::notice::No review suggestions generated"
