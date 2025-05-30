@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   pr-concierge:
     runs-on: ubuntu-latest
@@ -15,6 +19,27 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
+
+      - name: 🔍 Check required secrets
+        run: |
+          echo "🔍 Checking required secrets..."
+          
+          if [[ -z "${{ secrets.DIFY_PR_API_KEY }}" ]]; then
+            echo "::error::DIFY_PR_API_KEY secret is not set. Please configure it in repository Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          
+          if [[ -z "${{ secrets.DIFY_BASE_URL }}" ]]; then
+            echo "::warning::DIFY_BASE_URL secret is not set. Using default: https://dify.arklet.jp/v1"
+            echo "DIFY_BASE_URL=https://dify.arklet.jp/v1" >> $GITHUB_ENV
+          else
+            echo "DIFY_BASE_URL=${{ secrets.DIFY_BASE_URL }}" >> $GITHUB_ENV
+          fi
+          
+          # APIキーを環境変数にエクスポート
+          echo "DIFY_PR_API_KEY=${{ secrets.DIFY_PR_API_KEY }}" >> $GITHUB_ENV
+          
+          echo "✅ Required secrets are properly configured"
 
       - name: 🔧 Setup dependencies
         run: |
@@ -54,61 +79,87 @@ jobs:
       - name: 🤖 Generate PR description
         id: generate-description
         if: steps.get-diff.outputs.has_changes == 'true'
+        env:
+          PR_DIFF: ${{ steps.get-diff.outputs.diff }}
         run: |
-          DIFF='${{ steps.get-diff.outputs.diff }}'
+          echo "=== Starting PR description generation ==="
           
-          # JSONエスケープ
-          ESCAPED_DIFF=$(echo "$DIFF" | jq -Rs .)
+          echo "=== Preparing JSON payload ==="
+          # JSONペイロードを生成（jqを使用して安全にエスケープ）
+          REQUEST_JSON=$(jq -n --arg diff "$PR_DIFF" --arg env "frontend" '{ inputs: { diff: $diff, env: $env }, response_mode: "blocking", user: "github-actions-pr-concierge" }')
           
-          echo "🔄 Generating PR description with AI..."
+          echo "=== Making API call ==="
+          echo "API Endpoint: $DIFY_BASE_URL/workflows/run"
+          echo "API Key prefix: $(echo "$DIFY_PR_API_KEY" | head -c 8)..."
           
-          RESPONSE=$(curl -s -X POST "${{ secrets.DIFY_BASE_URL }}/workflows/run" \
-            -H "Authorization: Bearer ${{ secrets.DIFY_PR_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"inputs\": {
-                \"diff\": $ESCAPED_DIFF,
-                \"env\": \"frontend\"
-              },
-              \"response_mode\": \"blocking\",
-              \"user\": \"github-actions-pr-concierge\"
-            }")
-          
-          # エラーチェック
-          if [[ $? -ne 0 ]]; then
-            echo "::error::Failed to call Dify API"
+          # APIキーが設定されているか確認
+          if [[ -z "$DIFY_PR_API_KEY" ]]; then
+            echo "::error::DIFY_PR_API_KEY environment variable is empty"
             exit 1
           fi
           
-          ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // empty')
+          RESPONSE=$(curl -s -w "HTTP_CODE:%{http_code}" -X POST "$DIFY_BASE_URL/workflows/run" \
+            -H "Authorization: Bearer $DIFY_PR_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$REQUEST_JSON")
+          CURL_EXIT_CODE=$?
+          
+          echo "=== Processing response ==="
+          # HTTPステータスコードを抽出
+          HTTP_CODE=$(echo "$RESPONSE" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+          RESPONSE_BODY=$(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*$//')
+          
+          echo "HTTP Status Code: $HTTP_CODE"
+          echo "Response Body: $RESPONSE_BODY"
+          
+          # cURLエラーチェック (最初にチェック)
+          if [[ $CURL_EXIT_CODE -ne 0 ]]; then
+            echo "::error::Failed to call Dify API (curl error code: $CURL_EXIT_CODE)"
+            exit 1
+          fi
+          
+          # HTTPエラーチェック
+          if [[ "$HTTP_CODE" -ge 400 ]]; then
+            echo "::error::Dify API HTTP Error: $HTTP_CODE"
+            echo "::error::Response: $RESPONSE_BODY"
+            exit 1
+          fi
+          
+          # JSON エラーチェック
+          ERROR_MSG=$(echo "$RESPONSE_BODY" | jq -r '.error // empty')
           if [[ -n "$ERROR_MSG" ]]; then
             echo "::error::Dify API Error: $ERROR_MSG"
+            echo "::error::Full Response: $RESPONSE_BODY"
             exit 1
           fi
           
           # PR本文抽出
-          PR_BODY=$(echo "$RESPONSE" | jq -r '.data.outputs.pr_body_md // .data.outputs.text // empty')
+          PR_BODY=$(echo "$RESPONSE_BODY" | jq -r '.data.outputs.pr_body_md // .data.outputs.text // empty')
           
           if [[ -z "$PR_BODY" || "$PR_BODY" == "null" ]]; then
-            echo "::error::Failed to generate PR description. API Response: $RESPONSE"
+            echo "::error::Failed to generate PR description. No valid output found."
+            echo "::error::Expected 'data.outputs.pr_body_md' or 'data.outputs.text' field"
+            echo "::error::API Response: $RESPONSE_BODY"
             exit 1
           fi
           
-          echo "Generated PR description:"
+          echo "✅ Generated PR description:"
           echo "$PR_BODY"
           
           # マルチライン対応
           echo "pr_body<<EOF" >> $GITHUB_OUTPUT
           echo "$PR_BODY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "=== Script completed successfully ==="
 
       - name: 📝 Update PR description
         if: steps.generate-description.outputs.pr_body != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GENERATED_BODY: ${{ steps.generate-description.outputs.pr_body }}
         run: |
           PR_NUMBER="${{ github.event.pull_request.number }}"
-          GENERATED_BODY='${{ steps.generate-description.outputs.pr_body }}'
           
           echo "📝 Updating PR #$PR_NUMBER with AI-generated description"
           
@@ -118,12 +169,30 @@ jobs:
           # 一時ファイルに新しい本文を作成
           if echo "$CURRENT_BODY" | grep -q "<!-- AI-GENERATED-CONTENT -->"; then
             echo "PR already has AI-generated content, updating..."
-            echo "$CURRENT_BODY" | perl -0pe 's/<!-- AI-GENERATED-CONTENT -->.*?<!-- \/AI-GENERATED-CONTENT -->/<!-- AI-GENERATED-CONTENT -->\n'"$GENERATED_BODY"'\n<!-- \/AI-GENERATED-CONTENT -->/gs' > /tmp/new_body.md
+            # 既存のAI生成コンテンツを置き換え
+            {
+              echo "$CURRENT_BODY" | sed '/<!-- AI-GENERATED-CONTENT -->/,/<!-- \/AI-GENERATED-CONTENT -->/d'
+              echo "<!-- AI-GENERATED-CONTENT -->"
+              echo "$GENERATED_BODY"
+              echo "<!-- /AI-GENERATED-CONTENT -->"
+            } > /tmp/new_body.md
           else
             if [[ -n "$CURRENT_BODY" && "$CURRENT_BODY" != "null" ]]; then
-              printf "%s\n\n---\n\n<!-- AI-GENERATED-CONTENT -->\n%s\n<!-- /AI-GENERATED-CONTENT -->" "$CURRENT_BODY" "$GENERATED_BODY" > /tmp/new_body.md
+              {
+                echo "$CURRENT_BODY"
+                echo ""
+                echo "---"
+                echo ""
+                echo "<!-- AI-GENERATED-CONTENT -->"
+                echo "$GENERATED_BODY"
+                echo "<!-- /AI-GENERATED-CONTENT -->"
+              } > /tmp/new_body.md
             else
-              printf "<!-- AI-GENERATED-CONTENT -->\n%s\n<!-- /AI-GENERATED-CONTENT -->" "$GENERATED_BODY" > /tmp/new_body.md
+              {
+                echo "<!-- AI-GENERATED-CONTENT -->"
+                echo "$GENERATED_BODY"
+                echo "<!-- /AI-GENERATED-CONTENT -->"
+              } > /tmp/new_body.md
             fi
           fi
           
@@ -139,7 +208,7 @@ jobs:
           
           if [[ "${{ steps.get-diff.outputs.has_changes }}" == "false" ]]; then
             echo "No changes found in the PR." >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ steps.generate-description.outputs.pr_body }}" != "" ]]; then
+          elif [[ -n "${{ steps.generate-description.outputs.pr_body }}" ]]; then
             echo "✅ PR description was successfully generated and updated by AI." >> $GITHUB_STEP_SUMMARY
             echo "**PR Number:** #${{ github.event.pull_request.number }}" >> $GITHUB_STEP_SUMMARY
             echo "**Environment:** frontend" >> $GITHUB_STEP_SUMMARY

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, Check, X } from 'lucide-react'
+import { Plus, Trash2, Check, X, Filter } from 'lucide-react'
 
 interface Todo {
   id: string
@@ -10,9 +10,12 @@ interface Todo {
   createdAt: Date
 }
 
+type FilterType = 'all' | 'active' | 'completed'
+
 export default function TodoApp() {
   const [todos, setTodos] = useState<Todo[]>([])
   const [inputText, setInputText] = useState('')
+  const [filter, setFilter] = useState<FilterType>('all')
 
   // ローカルストレージからTodoを読み込み
   useEffect(() => {
@@ -59,8 +62,44 @@ export default function TodoApp() {
     setTodos(todos.filter(todo => todo.id !== id))
   }
 
+  // フィルタリング機能
+  const getFilteredTodos = () => {
+    switch (filter) {
+      case 'active':
+        return todos.filter(todo => !todo.completed)
+      case 'completed':
+        return todos.filter(todo => todo.completed)
+      default:
+        return todos
+    }
+  }
+
+  const filteredTodos = getFilteredTodos()
   const completedCount = todos.filter(todo => todo.completed).length
+  const activeCount = todos.filter(todo => !todo.completed).length
   const totalCount = todos.length
+
+  // フィルタボタンのスタイル
+  const getFilterButtonStyle = (filterType: FilterType) => {
+    const isActive = filter === filterType
+    return `px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
+      isActive
+        ? 'bg-blue-500 text-white shadow-md'
+        : 'bg-white text-gray-600 hover:bg-blue-50 hover:text-blue-600'
+    }`
+  }
+
+  // フィルタラベル
+  const getFilterLabel = (filterType: FilterType) => {
+    switch (filterType) {
+      case 'all':
+        return `全て (${totalCount})`
+      case 'active':
+        return `未完了 (${activeCount})`
+      case 'completed':
+        return `完了済み (${completedCount})`
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-8 px-4">
@@ -96,15 +135,51 @@ export default function TodoApp() {
           </div>
         </div>
 
+        {/* フィルタボタン */}
+        {todos.length > 0 && (
+          <div className="bg-white rounded-xl shadow-lg p-4 mb-6">
+            <div className="flex items-center gap-3">
+              <Filter size={20} className="text-gray-500" />
+              <span className="text-gray-700 font-medium">フィルタ:</span>
+              <div className="flex gap-2 flex-wrap">
+                {(['all', 'active', 'completed'] as FilterType[]).map((filterType) => (
+                  <button
+                    key={filterType}
+                    onClick={() => setFilter(filterType)}
+                    className={getFilterButtonStyle(filterType)}
+                  >
+                    {getFilterLabel(filterType)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Todo一覧 */}
         <div className="space-y-3">
-          {todos.length === 0 ? (
+          {filteredTodos.length === 0 ? (
             <div className="bg-white rounded-xl shadow-lg p-8 text-center">
-              <p className="text-gray-500 text-lg">タスクがありません</p>
-              <p className="text-gray-400 text-sm mt-2">上のフォームから新しいタスクを追加してください</p>
+              {todos.length === 0 ? (
+                <>
+                  <p className="text-gray-500 text-lg">タスクがありません</p>
+                  <p className="text-gray-400 text-sm mt-2">上のフォームから新しいタスクを追加してください</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-gray-500 text-lg">
+                    {filter === 'active' && '未完了のタスクがありません'}
+                    {filter === 'completed' && '完了済みのタスクがありません'}
+                  </p>
+                  <p className="text-gray-400 text-sm mt-2">
+                    {filter === 'active' && '新しいタスクを追加するか、他のフィルタを選択してください'}
+                    {filter === 'completed' && 'タスクを完了するか、他のフィルタを選択してください'}
+                  </p>
+                </>
+              )}
             </div>
           ) : (
-            todos.map((todo) => (
+            filteredTodos.map((todo) => (
               <div
                 key={todo.id}
                 className={`bg-white rounded-xl shadow-lg p-4 transition-all duration-200 hover:shadow-xl ${
