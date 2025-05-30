@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { Plus, Trash2, Check, X, Filter } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { Plus, Trash2, Check, X, Filter, Search } from 'lucide-react'
 
 interface Todo {
   id: string
@@ -12,10 +12,34 @@ interface Todo {
 
 type FilterType = 'all' | 'active' | 'completed'
 
+// ハイライト表示用コンポーネント
+const HighlightedText = ({ text, searchText }: { text: string, searchText: string }) => {
+  if (!searchText.trim()) {
+    return <span>{text}</span>
+  }
+
+  const parts = text.split(new RegExp(`(${searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'))
+  
+  return (
+    <span>
+      {parts.map((part, index) => (
+        part.toLowerCase() === searchText.toLowerCase() ? (
+          <span key={index} className="bg-yellow-200 text-yellow-900 rounded px-1">
+            {part}
+          </span>
+        ) : (
+          <span key={index}>{part}</span>
+        )
+      ))}
+    </span>
+  )
+}
+
 export default function TodoApp() {
   const [todos, setTodos] = useState<Todo[]>([])
   const [inputText, setInputText] = useState('')
   const [filter, setFilter] = useState<FilterType>('all')
+  const [searchText, setSearchText] = useState('')
 
   // ローカルストレージからTodoを読み込み
   useEffect(() => {
@@ -62,19 +86,33 @@ export default function TodoApp() {
     setTodos(todos.filter(todo => todo.id !== id))
   }
 
-  // フィルタリング機能
-  const getFilteredTodos = () => {
+  // フィルタリングと検索機能
+  const filteredTodos = useMemo(() => {
+    let result = todos
+
+    // フィルタを適用
     switch (filter) {
       case 'active':
-        return todos.filter(todo => !todo.completed)
+        result = result.filter(todo => !todo.completed)
+        break
       case 'completed':
-        return todos.filter(todo => todo.completed)
+        result = result.filter(todo => todo.completed)
+        break
       default:
-        return todos
+        // 'all' の場合はそのまま
+        break
     }
-  }
 
-  const filteredTodos = getFilteredTodos()
+    // 検索を適用
+    if (searchText.trim()) {
+      result = result.filter(todo =>
+        todo.text.toLowerCase().includes(searchText.toLowerCase())
+      )
+    }
+
+    return result
+  }, [todos, filter, searchText])
+
   const completedCount = todos.filter(todo => todo.completed).length
   const activeCount = todos.filter(todo => !todo.completed).length
   const totalCount = todos.length
@@ -99,6 +137,11 @@ export default function TodoApp() {
       case 'completed':
         return `完了済み (${completedCount})`
     }
+  }
+
+  // 検索クリア
+  const clearSearch = () => {
+    setSearchText('')
   }
 
   return (
@@ -135,6 +178,37 @@ export default function TodoApp() {
           </div>
         </div>
 
+        {/* 検索フィールド */}
+        {todos.length > 0 && (
+          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                <Search size={20} className="text-gray-400" />
+              </div>
+              <input
+                type="text"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder="タスクを検索..."
+                className="w-full pl-12 pr-12 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none transition-colors text-gray-900 placeholder:text-gray-500"
+              />
+              {searchText && (
+                <button
+                  onClick={clearSearch}
+                  className="absolute inset-y-0 right-0 pr-4 flex items-center"
+                >
+                  <X size={20} className="text-gray-400 hover:text-gray-600 transition-colors" />
+                </button>
+              )}
+            </div>
+            {searchText && (
+              <p className="text-sm text-gray-500 mt-2">
+                検索結果: {filteredTodos.length}件
+              </p>
+            )}
+          </div>
+        )}
+
         {/* フィルタボタン */}
         {todos.length > 0 && (
           <div className="bg-white rounded-xl shadow-lg p-4 mb-6">
@@ -164,6 +238,11 @@ export default function TodoApp() {
                 <>
                   <p className="text-gray-500 text-lg">タスクがありません</p>
                   <p className="text-gray-400 text-sm mt-2">上のフォームから新しいタスクを追加してください</p>
+                </>
+              ) : searchText ? (
+                <>
+                  <p className="text-gray-500 text-lg">「{searchText}」に一致するタスクがありません</p>
+                  <p className="text-gray-400 text-sm mt-2">別のキーワードで検索するか、検索をクリアしてください</p>
                 </>
               ) : (
                 <>
@@ -204,7 +283,7 @@ export default function TodoApp() {
                         ? 'line-through text-gray-500' 
                         : 'text-gray-800'
                     }`}>
-                      {todo.text}
+                      <HighlightedText text={todo.text} searchText={searchText} />
                     </p>
                     <p className="text-sm text-gray-400 mt-1">
                       {todo.createdAt.toLocaleString('ja-JP')}
