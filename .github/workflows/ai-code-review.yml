@@ -2,7 +2,7 @@ name: 🤖 AI Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review]
+    types: [opened, synchronize, ready_for_review, labeled]
 
 permissions:
   contents: read
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event.pull_request.draft == false &&
-      (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review')
+      (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' || github.event.action == 'labeled')
     
     steps:
       - name: 📥 Checkout repository
@@ -22,21 +22,36 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: 🏷️ Check labels (optional filtering)
+      - name: 🏷️ Check labels (ai-review required)
         id: check-labels
         run: |
-          # オプション: 特定のラベルがある場合のみレビュー実行
-          # ラベルでフィルタリングしない場合は skip_review=false を設定
-          echo "skip_review=false" >> $GITHUB_OUTPUT
+          echo "🏷️ Checking ai-review label..."
           
-          # ラベルフィルタリングを有効にする場合は以下のコメントを外す
-          # LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels --jq '.labels[].name' | tr '\n' ' ')
-          # if [[ "$LABELS" == *"ai-review"* ]]; then
-          #   echo "skip_review=false" >> $GITHUB_OUTPUT
-          # else
-          #   echo "skip_review=true" >> $GITHUB_OUTPUT
-          #   echo "::notice::Skipping AI review - 'ai-review' label not found"
-          # fi
+          if [[ "${{ github.event.action }}" == "labeled" ]]; then
+            # labeledイベント：追加されたラベルが ai-review かチェック
+            ADDED_LABEL="${{ github.event.label.name }}"
+            echo "Added label: $ADDED_LABEL"
+            
+            if [[ "$ADDED_LABEL" == "ai-review" ]]; then
+              echo "✅ ai-review label was added - proceeding with review"
+              echo "skip_review=false" >> $GITHUB_OUTPUT
+            else
+              echo "⏭️ Added label '$ADDED_LABEL' is not ai-review - skipping"
+              echo "skip_review=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            # その他のイベント：現在のPRに ai-review ラベルがあるかチェック
+            LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels --jq '.labels[].name' | tr '\n' ' ')
+            echo "Current labels: $LABELS"
+            
+            if [[ "$LABELS" == *"ai-review"* ]]; then
+              echo "✅ ai-review label found - proceeding with review"
+              echo "skip_review=false" >> $GITHUB_OUTPUT
+            else
+              echo "⏭️ ai-review label not found - skipping review"
+              echo "skip_review=true" >> $GITHUB_OUTPUT
+            fi
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
