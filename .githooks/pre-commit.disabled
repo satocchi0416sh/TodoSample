@@ -1,0 +1,82 @@
+#!/bin/bash
+
+# Pre-commit hook for Commit Buddy
+# This hook will automatically generate conventional commit messages using AI
+
+set -e
+
+# スクリプトのディレクトリを取得
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# カラー出力
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+info() {
+    echo -e "${BLUE}ℹ️  [PRE-COMMIT] $1${NC}"
+}
+
+warning() {
+    echo -e "${YELLOW}⚠️  [PRE-COMMIT] $1${NC}"
+}
+
+error() {
+    echo -e "${RED}❌ [PRE-COMMIT] $1${NC}" >&2
+}
+
+success() {
+    echo -e "${GREEN}✅ [PRE-COMMIT] $1${NC}"
+}
+
+# Commit Buddyスクリプトの存在確認
+COMMIT_BUDDY_SCRIPT="$PROJECT_ROOT/commit-buddy.sh"
+
+if [[ ! -f "$COMMIT_BUDDY_SCRIPT" ]]; then
+    warning "commit-buddy.sh が見つかりません: $COMMIT_BUDDY_SCRIPT"
+    warning "通常のcommitを続行します..."
+    exit 0
+fi
+
+# 実行権限の確認
+if [[ ! -x "$COMMIT_BUDDY_SCRIPT" ]]; then
+    warning "commit-buddy.sh に実行権限がありません"
+    warning "chmod +x $COMMIT_BUDDY_SCRIPT を実行してください"
+    warning "通常のcommitを続行します..."
+    exit 0
+fi
+
+# 必須環境変数の確認
+if [[ -z "$DIFY_API_KEY" ]]; then
+    warning "Commit Buddy の環境変数が設定されていません:"
+    warning "  DIFY_API_KEY: ${DIFY_API_KEY:+設定済み}"
+    warning ""
+    warning "Commit Buddy を使用するには以下を設定してください:"
+    warning "  export DIFY_API_KEY=\"your-api-key\""
+    warning ""
+    warning "通常のcommitを続行します..."
+    exit 0
+fi
+
+# staging エリアに変更があるかチェック
+if ! git diff --cached --quiet; then
+    info "Commit Buddy でconventional commitメッセージを生成します..."
+    
+    # commit-buddy.shを--forceフラグで実行（確認プロンプトをスキップ）
+    if "$COMMIT_BUDDY_SCRIPT" --force; then
+        success "Commit Buddy による処理が完了しました"
+        # commit-buddy.sh がcommitを実行したので、元のcommitプロセスを中断
+        exit 1
+    else
+        error "Commit Buddy の実行に失敗しました"
+        warning "通常のcommitを続行します..."
+        exit 0
+    fi
+else
+    warning "staging エリアに変更がありません"
+    warning "git add でファイルをstageしてください"
+    exit 1
+fi 

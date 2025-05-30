@@ -1,0 +1,152 @@
+name: 🤖 Commit Buddy - Auto Conventional Commit
+
+on:
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      force_rewrite:
+        description: '強制的にcommitメッセージを書き換える'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  commit-buddy:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip-commit-buddy]')
+    
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 2
+
+      - name: 🔧 Setup dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: 📊 Get commit diff
+        id: get-diff
+        run: |
+          # 最新のcommitのdiffを取得
+          DIFF=$(git diff HEAD~1..HEAD)
+          
+          if [[ -z "$DIFF" ]]; then
+            echo "::notice::No changes found in the latest commit"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+          
+          # マルチライン対応
+          echo "diff<<EOF" >> $GITHUB_OUTPUT
+          echo "$DIFF" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: 🤖 Generate conventional commit message
+        id: generate-message
+        if: steps.get-diff.outputs.has_changes == 'true'
+        run: |
+          # Dify APIを呼び出してcommitメッセージを生成
+          DIFF='${{ steps.get-diff.outputs.diff }}'
+          
+          # JSONエスケープ
+          ESCAPED_DIFF=$(echo "$DIFF" | jq -Rs .)
+          
+          echo "🔄 Generating conventional commit message..."
+          
+          RESPONSE=$(curl -s -X POST "${{ secrets.DIFY_BASE_URL }}/workflows/run" \
+            -H "Authorization: Bearer ${{ secrets.DIFY_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"inputs\": {
+                \"diff\": $ESCAPED_DIFF
+              },
+              \"response_mode\": \"blocking\",
+              \"user\": \"github-actions\"
+            }")
+          
+          # エラーチェック
+          if [[ $? -ne 0 ]]; then
+            echo "::error::Failed to call Dify API"
+            exit 1
+          fi
+          
+          ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // empty')
+          if [[ -n "$ERROR_MSG" ]]; then
+            echo "::error::Dify API Error: $ERROR_MSG"
+            exit 1
+          fi
+          
+          # commitメッセージ抽出
+          COMMIT_MESSAGE=$(echo "$RESPONSE" | jq -r '.data.outputs.commit // .data.outputs.text // empty')
+          
+          if [[ -z "$COMMIT_MESSAGE" || "$COMMIT_MESSAGE" == "null" ]]; then
+            echo "::error::Failed to generate commit message. API Response: $RESPONSE"
+            exit 1
+          fi
+          
+          echo "Generated message: $COMMIT_MESSAGE"
+          echo "message=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
+
+      - name: 📝 Check if commit message needs update
+        id: check-message
+        if: steps.get-diff.outputs.has_changes == 'true'
+        run: |
+          CURRENT_MESSAGE="${{ github.event.head_commit.message }}"
+          GENERATED_MESSAGE="${{ steps.generate-message.outputs.message }}"
+          
+          echo "Current commit message: $CURRENT_MESSAGE"
+          echo "Generated commit message: $GENERATED_MESSAGE"
+          
+          # commitメッセージが既にconventional commitの形式かチェック
+          if echo "$CURRENT_MESSAGE" | grep -qE "^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+\))?: .+"; then
+            if [[ "${{ github.event.inputs.force_rewrite }}" != "true" ]]; then
+              echo "::notice::Current commit message already follows conventional commit format"
+              echo "needs_update=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          
+          echo "needs_update=true" >> $GITHUB_OUTPUT
+
+      - name: 🔄 Update commit message
+        if: steps.check-message.outputs.needs_update == 'true'
+        run: |
+          GENERATED_MESSAGE="${{ steps.generate-message.outputs.message }}"
+          
+          echo "📝 Updating commit message to: $GENERATED_MESSAGE"
+          
+          # commit messageを更新
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          git commit --amend -m "$GENERATED_MESSAGE"
+          
+          echo "✅ Commit message updated successfully!"
+
+      - name: 🚀 Force push updated commit
+        if: steps.check-message.outputs.needs_update == 'true'
+        run: |
+          git push --force-with-lease origin ${{ github.ref_name }}
+          echo "✅ Updated commit pushed successfully!"
+
+      - name: 📊 Summary
+        if: always()
+        run: |
+          echo "## 🤖 Commit Buddy Summary" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ steps.get-diff.outputs.has_changes }}" == "false" ]]; then
+            echo "No changes found in the latest commit." >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ steps.check-message.outputs.needs_update }}" == "false" ]]; then
+            echo "✅ Commit message already follows conventional commit format." >> $GITHUB_STEP_SUMMARY
+            echo "**Current message:** ${{ github.event.head_commit.message }}" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ steps.check-message.outputs.needs_update }}" == "true" ]]; then
+            echo "🔄 Commit message was updated to follow conventional commit format." >> $GITHUB_STEP_SUMMARY
+            echo "**Original:** ${{ github.event.head_commit.message }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Updated:** ${{ steps.generate-message.outputs.message }}" >> $GITHUB_STEP_SUMMARY
+          fi 
